@@ -232,10 +232,58 @@
 </div>
 
 
+<script>
+  // Watchdog: independent of the module script below. If the module never even
+  // starts executing (blocked script, ad/content blocker, parse error), this
+  // still gives a visible signal instead of a silently dead page.
+  setTimeout(function () {
+    if (!window.__rsBooted) {
+      var s = document.getElementById('status');
+      if (s) { s.textContent = 'SCRIPT FAILED TO START'; s.className = 'error'; }
+      var p = document.getElementById('placeholder');
+      if (p) {
+        p.textContent = 'The app script never started. This usually means a browser extension, ad blocker, or content blocker is preventing the page script from running. Try disabling extensions for this site, or open in a different browser (Chrome recommended).';
+      }
+    }
+  }, 4000);
+</script>
 <script type="module">
-import { pipeline, RawImage } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
-import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+window.__rsBooted = true;
+let pipeline, RawImage, THREE, OrbitControls;
+let libsLoaded = false, libsLoadPromise = null;
+
+async function loadLibs() {
+  if (libsLoaded) return true;
+  if (libsLoadPromise) return libsLoadPromise;
+  libsLoadPromise = (async () => {
+    try {
+      logInfo('Fetching transformers.js from CDN…');
+      let t0 = performance.now();
+      const tmod = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0');
+      pipeline = tmod.pipeline; RawImage = tmod.RawImage;
+      logOk(`transformers.js loaded (${Math.round(performance.now() - t0)}ms)`);
+
+      logInfo('Fetching three.js from CDN…');
+      t0 = performance.now();
+      const threeMod = await import('https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js');
+      THREE = threeMod;
+      logOk(`three.js loaded (${Math.round(performance.now() - t0)}ms)`);
+
+      logInfo('Fetching OrbitControls from CDN…');
+      t0 = performance.now();
+      const ocMod = await import('https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js');
+      OrbitControls = ocMod.OrbitControls;
+      logOk(`OrbitControls loaded (${Math.round(performance.now() - t0)}ms)`);
+
+      libsLoaded = true;
+      return true;
+    } catch (err) {
+      logError(`Library load failed: ${err && err.message ? err.message : err}. Check your connection — this app needs to download ~20MB+ from cdn.jsdelivr.net.`);
+      return false;
+    }
+  })();
+  return libsLoadPromise;
+}
 
 const FURNITURE_KEYWORDS = [
   "chair","table","sofa","couch","bed","cabinet","desk","shelf","bookcase",
@@ -413,6 +461,13 @@ function refreshActionButton() {
 
 async function loadModel() {
   try {
+    const ok = await loadLibs();
+    if (!ok) {
+      setStatus('LIBRARY LOAD FAILED', 'error');
+      showError('Could not load required libraries from the CDN. Check your connection (Debug log has details) and reload.');
+      refreshActionButton();
+      return;
+    }
     setStatus('DOWNLOADING MODELS… 0%', 'busy');
     logInfo('Loading segmentation model (Xenova/segformer-b0-finetuned-ade-512-512)…');
     segmenter = await pipeline('image-segmentation', 'Xenova/segformer-b0-finetuned-ade-512-512', {
@@ -533,8 +588,10 @@ function stopLiveLoop() {
 
 // ============ 3D WORLD ============
 
-function ensureThree() {
-  if (renderer3d) return;
+async function ensureThree() {
+  if (renderer3d) return true;
+  const ok = await loadLibs();
+  if (!ok) return false;
   renderer3d = new THREE.WebGLRenderer({ canvas: stage3d, antialias: true, alpha: false });
   renderer3d.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   scene3d = new THREE.Scene();
@@ -549,6 +606,7 @@ function ensureThree() {
   controls3d.rotateSpeed = 0.6;
   const light = new THREE.AmbientLight(0xffffff, 1);
   scene3d.add(light);
+  return true;
 }
 
 function resizeThree() {
@@ -683,7 +741,8 @@ async function enter3D() {
   if (!segmenter || !depther) { showError('Models still loading — please wait.'); return; }
   if (mode !== 'camera') return;
   clearError();
-  ensureThree();
+  const ok = await ensureThree();
+  if (!ok) { showError('Could not load the 3D library. Check your connection (Debug log has details) and reload.'); return; }
   resizeThree();
   stopLiveLoop();
   canvas.style.display = 'none';
@@ -738,12 +797,15 @@ function addARPoint(x, y, z) {
   arPointsGeom.setDrawRange(0, arCount);
 }
 
-const _invProj = new THREE.Matrix4();
-const _clip = new THREE.Vector4();
-const _worldMat = new THREE.Matrix4();
-const _pt = new THREE.Vector3();
+let _invProj, _clip, _worldMat, _pt;
 
 function unprojectAndAdd(view, ndcX, ndcY, depthMeters) {
+  if (!_invProj) {
+    _invProj = new THREE.Matrix4();
+    _clip = new THREE.Vector4();
+    _worldMat = new THREE.Matrix4();
+    _pt = new THREE.Vector3();
+  }
   _invProj.fromArray(view.projectionMatrix).invert();
   _clip.set(ndcX, ndcY, -1, 1).applyMatrix4(_invProj);
   if (_clip.w !== 0) _clip.divideScalar(_clip.w);
@@ -817,7 +879,8 @@ async function startARScan() {
     return;
   }
   clearError();
-  ensureThree();
+  const ok = await ensureThree();
+  if (!ok) { showError('Could not load the 3D library. Check your connection (Debug log has details) and reload.'); return; }
   initARPoints();
   stopLiveLoop();
   if (live3DActive) exit3D();
