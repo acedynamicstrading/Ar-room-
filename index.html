@@ -184,7 +184,7 @@
     <div class="corner tr"></div>
     <div class="corner bl"></div>
     <div class="corner br"></div>
-    <div id="placeholder">Starting camera…</div>
+    <div id="placeholder">Starting camera… If nothing happens in a few seconds, tap "Enable Camera" below.</div>
   </div>
 </main>
 
@@ -201,7 +201,7 @@
 </div>
 
 <div id="controls">
-  <button id="btnCamera" style="display:none">Retry Camera Access</button>
+  <button id="btnCamera" class="primary">Enable Camera</button>
   <button id="btnScan" class="primary" disabled>Loading model…</button>
 </div>
 <div id="controls2">
@@ -354,6 +354,7 @@ btnARDebug.addEventListener('click', () => {
 
 logInfo(`Session start — UA: ${navigator.userAgent}`);
 logInfo(`Secure context: ${window.isSecureContext}, WebXR present: ${!!navigator.xr}`);
+logInfo('Attempting camera auto-start (best-effort — some mobile browsers silently stall getUserMedia without a tap; "Enable Camera" button is the guaranteed fallback).');
 
 let segmenter = null;
 let depther = null;
@@ -484,7 +485,6 @@ async function checkARSupport() {
 async function startCamera() {
   clearError();
   resetToStill();
-  btnCamera.style.display = 'none';
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     logError('navigator.mediaDevices.getUserMedia unavailable (insecure context or unsupported browser).');
     showError('Camera access needs a secure connection. If you opened this file directly, host it (e.g. GitHub Pages) and reload.');
@@ -503,6 +503,7 @@ async function startCamera() {
     mode = 'camera';
     placeholderEl.style.display = 'none';
     controls2.style.display = 'flex';
+    btnCamera.style.display = 'none';
     refreshActionButton();
     checkARSupport();
     startLiveLoop();
@@ -856,7 +857,7 @@ btnExitAR.addEventListener('click', () => { if (arSession) arSession.end(); });
 
 checkARSupport();
 loadModel();
-startCamera(); // ask for camera permission immediately on load
+startCamera(); // best-effort auto-start; "Enable Camera" button above is the reliable fallback if the browser stalls this
 </script>
 </body>
 </html>
