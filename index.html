@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Room Scanner</title>
+<style>
+  :root {
+    --bg: #1a1b1e;
+    --panel: #232427;
+    --line: rgba(255,255,255,0.14);
+    --text: #e8e8ea;
+    --text-dim: #8b8d93;
+    --mono: "SF Mono", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --c-wall: #3cc83c;
+    --c-floor: #ff8c00;
+    --c-furniture: #dc2828;
+    --c-human: #dc3cc8;
+    --c-other: #e6dc00;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font-family: var(--sans);
+    overscroll-behavior: none;
+  }
+  body { display: flex; flex-direction: column; min-height: 100vh; min-height: 100dvh; }
+  header {
+    padding: 10px 14px 8px;
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid var(--line);
+  }
+  h1 {
+    font-size: 13px; margin: 0; font-weight: 600;
+    letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim);
+  }
+  #headerRight { display: flex; align-items: center; gap: 8px; }
+  #btnDebug {
+    font-family: var(--mono); font-size: 11px; color: var(--text-dim);
+    background: transparent; border: 1px solid var(--line); border-radius: 4px;
+    padding: 3px 7px; cursor: pointer;
+  }
+  #btnDebug.hasWarn { color: var(--c-floor); border-color: var(--c-floor); }
+  #btnDebug.hasError { color: var(--c-furniture); border-color: var(--c-furniture); }
+  #status {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.03em;
+    color: var(--text-dim);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%;
+  }
+  #status.ready { color: var(--c-wall); }
+  #status.busy { color: var(--c-floor); }
+  #status.error { color: var(--c-furniture); }
+
+  main {
+    flex: 1; position: relative;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden; background: var(--panel); padding: 14px;
+  }
+  #stageWrap {
+    position: relative; max-width: 100%; max-height: 100%;
+    border-radius: 4px; overflow: hidden; background: #000; line-height: 0;
+  }
+  video, canvas#stage, canvas#stage3d {
+    display: block; max-width: 100%; max-height: 70vh; width: auto; height: auto;
+  }
+  video { display: none; }
+  canvas#stage3d { display: none; touch-action: none; }
+
+  .corner { position: absolute; width: 22px; height: 22px; border: 2px solid rgba(255,255,255,0.55); pointer-events: none; }
+  .corner.tl { top: 8px; left: 8px; border-right: none; border-bottom: none; }
+  .corner.tr { top: 8px; right: 8px; border-left: none; border-bottom: none; }
+  .corner.bl { bottom: 8px; left: 8px; border-right: none; border-top: none; }
+  .corner.br { bottom: 8px; right: 8px; border-left: none; border-top: none; }
+
+  #placeholder {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    text-align: center; padding: 24px; color: var(--text-dim); font-size: 13px; line-height: 1.5;
+  }
+
+  #depthNote {
+    display: none; text-align: center; padding: 0 14px 8px;
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.02em; color: var(--text-dim);
+  }
+  #depthNote.on { display: block; }
+
+  #legend { display: flex; flex-wrap: wrap; gap: 6px 12px; padding: 10px 14px; justify-content: center;
+    border-top: 1px solid var(--line);
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.02em; color: var(--text-dim);
+  }
+  #legend .chip { display: inline-flex; align-items: center; gap: 5px; }
+  #legend .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+  #controls { display: flex; gap: 8px; padding: 12px 14px calc(14px + env(safe-area-inset-bottom)); }
+  #controls2 { display: none; gap: 8px; padding: 0 14px 12px; }
+  button {
+    flex: 1; font-family: var(--sans); font-size: 14px; font-weight: 600;
+    padding: 13px 10px; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--text); cursor: pointer;
+  }
+  button:active { transform: scale(0.98); }
+  button:disabled { opacity: 0.4; cursor: default; }
+  button.primary { background: var(--text); color: #16171a; border-color: var(--text); }
+  button.primary:disabled { background: var(--panel); color: var(--text-dim); border-color: var(--line); }
+  button.arbtn { border-color: var(--c-human); color: var(--c-human); }
+
+  #arOverlay { display: none; position: fixed; inset: 0; z-index: 1000; pointer-events: none; }
+  #arOverlay.on { display: block; }
+  #arOverlay .arBar {
+    position: absolute; top: calc(12px + env(safe-area-inset-top)); left: 12px; right: 12px;
+    display: flex; justify-content: space-between; align-items: center; gap: 10px; pointer-events: auto;
+  }
+  #arOverlay .arBar > div { display: flex; gap: 8px; }
+  #arStats {
+    font-family: var(--mono); font-size: 12px; color: #fff;
+    background: rgba(0,0,0,0.55); padding: 7px 11px; border-radius: 6px;
+  }
+  #btnExitAR {
+    font-family: var(--sans); font-weight: 600; font-size: 13px; padding: 10px 16px;
+    border-radius: 6px; border: 1px solid rgba(255,255,255,0.4);
+    background: rgba(20,20,22,0.75); color: #fff; cursor: pointer;
+  }
+
+  #errorNote {
+    display: none; margin: 0 14px 10px; padding: 10px 12px;
+    border: 1px solid var(--c-furniture); border-radius: 6px;
+    font-size: 12.5px; line-height: 1.5; color: var(--text); background: rgba(220,40,40,0.08);
+  }
+
+  #debugPanel {
+    display: none; position: fixed; inset: 0; z-index: 2000;
+    background: rgba(10,10,11,0.97); flex-direction: column;
+  }
+  #debugPanel.on { display: flex; }
+  #debugBar {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: calc(10px + env(safe-area-inset-top)) 12px 10px; border-bottom: 1px solid var(--line);
+  }
+  #debugBar strong { font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); }
+  #debugBar div { display: flex; gap: 8px; }
+  #debugBar button {
+    flex: none; font-size: 12px; padding: 7px 11px; border-radius: 5px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer;
+  }
+  #debugLog {
+    flex: 1; overflow-y: auto; padding: 10px 12px; font-family: var(--mono);
+    font-size: 11px; line-height: 1.6; white-space: pre-wrap; word-break: break-word;
+  }
+  #debugLog .lvl-info { color: var(--text-dim); }
+  #debugLog .lvl-ok { color: var(--c-wall); }
+  #debugLog .lvl-warn { color: var(--c-floor); }
+  #debugLog .lvl-error { color: var(--c-furniture); }
+  #debugLog .ts { opacity: 0.5; }
+
+  #arDebugMini {
+    display: none; position: absolute; top: calc(12px + env(safe-area-inset-top) + 46px); left: 12px; right: 12px;
+    max-height: 26vh; overflow-y: auto;
+    background: rgba(0,0,0,0.6); border-radius: 6px; padding: 8px 10px;
+    font-family: var(--mono); font-size: 10.5px; line-height: 1.5; color: #ddd;
+    pointer-events: auto; white-space: pre-wrap; word-break: break-word;
+  }
+  #arDebugMini.on { display: block; }
+
+  @media (prefers-reduced-motion: no-preference) { #status { transition: color 0.2s ease; } }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Room Scanner</h1>
+  <div id="headerRight">
+    <div id="status" class="busy">STARTING…</div>
+    <button id="btnDebug">Debug</button>
+  </div>
+</header>
+
+<main>
+  <div id="stageWrap">
+    <video id="video" playsinline muted></video>
+    <canvas id="stage" width="512" height="384"></canvas>
+    <canvas id="stage3d"></canvas>
+    <div class="corner tl"></div>
+    <div class="corner tr"></div>
+    <div class="corner bl"></div>
+    <div class="corner br"></div>
+    <div id="placeholder">Starting camera…</div>
+  </div>
+</main>
+
+<div id="errorNote"></div>
+
+<div id="depthNote">depth is relative (monocular estimate), not measured — drag to orbit, pinch to zoom</div>
+
+<div id="legend">
+  <span class="chip" data-cat="wall"><span class="dot" style="background:var(--c-wall)"></span>wall</span>
+  <span class="chip" data-cat="floor"><span class="dot" style="background:var(--c-floor)"></span>floor</span>
+  <span class="chip" data-cat="furniture"><span class="dot" style="background:var(--c-furniture)"></span>furniture</span>
+  <span class="chip" data-cat="human"><span class="dot" style="background:var(--c-human)"></span>human</span>
+  <span class="chip" data-cat="other"><span class="dot" style="background:var(--c-other)"></span>other</span>
+</div>
+
+<div id="controls">
+  <button id="btnCamera" style="display:none">Retry Camera Access</button>
+  <button id="btnScan" class="primary" disabled>Loading model…</button>
+</div>
+<div id="controls2">
+  <button id="btnAR" class="arbtn" disabled>Checking AR support…</button>
+</div>
+
+<div id="arOverlay">
+  <div class="arBar">
+    <span id="arStats">0 pts</span>
+    <div>
+      <button id="btnARDebug" style="font-family:var(--sans);font-weight:600;font-size:13px;padding:10px 14px;border-radius:6px;border:1px solid rgba(255,255,255,0.4);background:rgba(20,20,22,0.75);color:#fff;cursor:pointer;">Debug</button>
+      <button id="btnExitAR">Exit AR</button>
+    </div>
+  </div>
+  <div id="arDebugMini"></div>
+</div>
+
+<div id="debugPanel">
+  <div id="debugBar">
+    <strong>Debug Log</strong>
+    <div>
+      <button id="btnCopyLog">Copy</button>
+      <button id="btnClearLog">Clear</button>
+      <button id="btnCloseDebug">Close</button>
+    </div>
+  </div>
+  <div id="debugLog"></div>
+</div>
+
+
+<script type="module">
+import { pipeline, RawImage } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+
+const FURNITURE_KEYWORDS = [
+  "chair","table","sofa","couch","bed","cabinet","desk","shelf","bookcase",
+  "wardrobe","closet","dresser","chest of drawers","counter","sink","stove",
+  "refrigerator","icebox","oven","microwave","dishwasher","washer","bench",
+  "stool","ottoman","armchair","cushion","pillow","lamp","chandelier","sconce",
+  "mirror","curtain","drape","blind","television","screen","monitor","computer",
+  "fireplace","bathtub","toilet","vase","clock","fan","radiator",
+  "kitchen island","buffet","sideboard","pool table","billiard","rug","carpet"
+];
+const FLOOR_KEYWORDS = ["floor"];
+const WALL_KEYWORDS = ["wall","ceiling","window","door"];
+const HUMAN_KEYWORDS = ["person","human","individual"];
+const CATEGORY_ORDER = ["wall","floor","furniture","human","other"];
+const CATEGORY_COLORS = {
+  wall:       [60,200,60],
+  floor:      [255,140,0],
+  furniture:  [220,40,40],
+  human:      [220,60,200],
+  other:      [230,220,0],
+};
+
+function categorizeLabel(label) {
+  const l = label.toLowerCase();
+  if (HUMAN_KEYWORDS.some(k => l.includes(k))) return "human";
+  if (FLOOR_KEYWORDS.some(k => l.includes(k))) return "floor";
+  if (WALL_KEYWORDS.some(k => l.includes(k))) return "wall";
+  if (FURNITURE_KEYWORDS.some(k => l.includes(k))) return "furniture";
+  return "other";
+}
+
+const statusEl = document.getElementById('status');
+const placeholderEl = document.getElementById('placeholder');
+const errorEl = document.getElementById('errorNote');
+const depthNoteEl = document.getElementById('depthNote');
+const videoEl = document.getElementById('video');
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d', { willReadFrequently: true });
+const stage3d = document.getElementById('stage3d');
+const btnCamera = document.getElementById('btnCamera');
+const btnScan = document.getElementById('btnScan');
+const controls2 = document.getElementById('controls2');
+const btnAR = document.getElementById('btnAR');
+const arOverlay = document.getElementById('arOverlay');
+const arStatsEl = document.getElementById('arStats');
+const btnExitAR = document.getElementById('btnExitAR');
+const btnDebug = document.getElementById('btnDebug');
+const debugPanel = document.getElementById('debugPanel');
+const debugLogEl = document.getElementById('debugLog');
+const btnCopyLog = document.getElementById('btnCopyLog');
+const btnClearLog = document.getElementById('btnClearLog');
+const btnCloseDebug = document.getElementById('btnCloseDebug');
+const btnARDebug = document.getElementById('btnARDebug');
+const arDebugMini = document.getElementById('arDebugMini');
+
+// ============ DEBUG LOG ============
+const debugEntries = [];
+function fmtTime() {
+  const d = new Date();
+  return d.toTimeString().slice(0, 8) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+}
+function log(level, msg) {
+  const line = `[${fmtTime()}] ${msg}`;
+  debugEntries.push({ level, line });
+  if (debugEntries.length > 400) debugEntries.shift();
+  const div = document.createElement('div');
+  div.className = 'lvl-' + level;
+  div.textContent = line;
+  debugLogEl.appendChild(div);
+  debugLogEl.scrollTop = debugLogEl.scrollHeight;
+  if (level === 'warn' && !btnDebug.classList.contains('hasError')) btnDebug.classList.add('hasWarn');
+  if (level === 'error') { btnDebug.classList.add('hasError'); btnDebug.classList.remove('hasWarn'); }
+  if (arDebugMini.classList.contains('on')) renderARMiniLog();
+}
+const logInfo = (m) => log('info', m);
+const logOk = (m) => log('ok', m);
+const logWarn = (m) => log('warn', m);
+const logError = (m) => log('error', m);
+
+function renderARMiniLog() {
+  const last = debugEntries.slice(-12);
+  arDebugMini.textContent = last.map(e => e.line).join('\n');
+  arDebugMini.scrollTop = arDebugMini.scrollHeight;
+}
+
+window.addEventListener('error', (e) => {
+  logError(`Uncaught error: ${e.message} (${e.filename}:${e.lineno})`);
+});
+window.addEventListener('unhandledrejection', (e) => {
+  logError(`Unhandled promise rejection: ${e.reason && e.reason.message ? e.reason.message : e.reason}`);
+});
+
+btnDebug.addEventListener('click', () => {
+  debugPanel.classList.add('on');
+  btnDebug.classList.remove('hasWarn', 'hasError');
+});
+btnCloseDebug.addEventListener('click', () => debugPanel.classList.remove('on'));
+btnClearLog.addEventListener('click', () => {
+  debugEntries.length = 0;
+  debugLogEl.innerHTML = '';
+});
+btnCopyLog.addEventListener('click', async () => {
+  const text = debugEntries.map(e => e.line).join('\n');
+  try {
+    await navigator.clipboard.writeText(text);
+    btnCopyLog.textContent = 'Copied!';
+    setTimeout(() => { btnCopyLog.textContent = 'Copy'; }, 1200);
+  } catch (e) {
+    logWarn('Clipboard copy failed — select and copy the text manually.');
+  }
+});
+btnARDebug.addEventListener('click', () => {
+  arDebugMini.classList.toggle('on');
+  if (arDebugMini.classList.contains('on')) renderARMiniLog();
+});
+
+logInfo(`Session start — UA: ${navigator.userAgent}`);
+logInfo(`Secure context: ${window.isSecureContext}, WebXR present: ${!!navigator.xr}`);
+
+let segmenter = null;
+let depther = null;
+let mode = null;        // 'camera' | null
+let liveLoopId = null;
+
+// ---- 3D world state ----
+const QUALITY_TIERS = [
+  { w: 28, h: 21, size: 0.045, label: 'LOW' },
+  { w: 44, h: 33, size: 0.032, label: 'MED' },
+  { w: 64, h: 48, size: 0.024, label: 'HIGH' },
+  { w: 88, h: 66, size: 0.018, label: 'ULTRA' },
+];
+const DEPTH_SCALE = 1.1;
+let tierIndex = 0;
+let fastStreak = 0, slowStreak = 0;
+let live3DActive = false;
+let renderer3d = null, scene3d = null, camera3d = null, controls3d = null;
+let pointsObj = null, pointsGeom = null;
+let renderLoopId = null;
+let dataLoopRunning = false;
+
+// ---- AR room-scan state ----
+let arSupported = false;
+let arSession = null;
+let arPointsGeom = null, arPointsObj = null;
+const AR_CAPACITY = 60000;
+const AR_SAMPLE_GRID = 14; // points sampled per row/col of the depth buffer, per XR frame
+let arPositions = null, arColors = null;
+let arWriteIndex = 0, arCount = 0;
+let arFrameCount = 0, arPoseCount = 0, arDepthCount = 0, arDepthMin = Infinity, arDepthMax = -Infinity;
+let arGotFirstPose = false, arGotFirstDepth = false, arLastStatsLog = 0;
+
+function setStatus(text, kind) {
+  statusEl.textContent = text;
+  statusEl.className = kind || '';
+}
+function showError(msg) { errorEl.textContent = msg; errorEl.style.display = 'block'; }
+function clearError() { errorEl.style.display = 'none'; }
+
+function refreshActionButton() {
+  if (!segmenter || !depther) {
+    btnScan.textContent = 'Loading models…';
+    btnScan.disabled = true;
+    return;
+  }
+  if (mode !== 'camera') {
+    btnScan.textContent = 'Live 3D (orbit)';
+    btnScan.disabled = true;
+    return;
+  }
+  btnScan.textContent = live3DActive ? 'Exit 3D World' : 'Live 3D (orbit)';
+  btnScan.disabled = false;
+  btnAR.disabled = !arSupported || !!arSession;
+}
+
+async function loadModel() {
+  try {
+    setStatus('DOWNLOADING MODELS… 0%', 'busy');
+    logInfo('Loading segmentation model (Xenova/segformer-b0-finetuned-ade-512-512)…');
+    segmenter = await pipeline('image-segmentation', 'Xenova/segformer-b0-finetuned-ade-512-512', {
+      progress_callback: (p) => {
+        if (p && typeof p.progress === 'number') {
+          setStatus(`DOWNLOADING MODELS… (seg) ${Math.round(p.progress)}%`, 'busy');
+        }
+      }
+    });
+    logOk('Segmentation model ready.');
+    logInfo('Loading depth model (Xenova/depth-anything-small-hf)…');
+    depther = await pipeline('depth-estimation', 'Xenova/depth-anything-small-hf', {
+      progress_callback: (p) => {
+        if (p && typeof p.progress === 'number') {
+          setStatus(`DOWNLOADING MODELS… (depth) ${Math.round(p.progress)}%`, 'busy');
+        }
+      }
+    });
+    logOk('Depth model ready.');
+    setStatus('MODELS READY', 'ready');
+  } catch (err) {
+    console.error(err);
+    logError(`Model load failed: ${err && err.message ? err.message : err}`);
+    setStatus('MODEL FAILED TO LOAD', 'error');
+    showError('Could not load the recognition models. Check your connection and reload (first run downloads ~20MB).');
+  }
+  refreshActionButton();
+}
+
+function fitCanvasTo(w, h) {
+  const maxDim = 512;
+  const scale = Math.min(1, maxDim / Math.max(w, h));
+  canvas.width = Math.max(1, Math.round(w * scale));
+  canvas.height = Math.max(1, Math.round(h * scale));
+  resizeThree();
+}
+
+function exit3D() {
+  live3DActive = false;
+  dataLoopRunning = false;
+  if (renderLoopId) cancelAnimationFrame(renderLoopId);
+  renderLoopId = null;
+  stage3d.style.display = 'none';
+  depthNoteEl.classList.remove('on');
+  canvas.style.display = 'block';
+  if (mode === 'camera') startLiveLoop();
+  refreshActionButton();
+}
+
+function resetToStill() {
+  // stop any in-progress 3D world / AR session before restarting the camera
+  if (live3DActive) exit3D();
+  if (arSession) { try { arSession.end(); } catch (e) {} }
+  tierIndex = 0;
+  fastStreak = 0; slowStreak = 0;
+}
+
+async function checkARSupport() {
+  if (navigator.xr && navigator.xr.isSessionSupported) {
+    try { arSupported = await navigator.xr.isSessionSupported('immersive-ar'); }
+    catch (e) { arSupported = false; logWarn(`isSessionSupported threw: ${e.message}`); }
+  } else {
+    logWarn('navigator.xr not present — WebXR unsupported in this browser.');
+  }
+  logInfo(`immersive-ar supported: ${arSupported}`);
+  btnAR.textContent = arSupported ? 'Scan Room in AR' : 'AR unsupported on this device/browser';
+  btnAR.disabled = !arSupported || mode !== 'camera' || !!arSession;
+}
+
+async function startCamera() {
+  clearError();
+  resetToStill();
+  btnCamera.style.display = 'none';
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    logError('navigator.mediaDevices.getUserMedia unavailable (insecure context or unsupported browser).');
+    showError('Camera access needs a secure connection. If you opened this file directly, host it (e.g. GitHub Pages) and reload.');
+    return;
+  }
+  logInfo('Requesting camera permission (facingMode: environment)…');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
+      audio: false
+    });
+    videoEl.srcObject = stream;
+    await videoEl.play();
+    fitCanvasTo(videoEl.videoWidth || 640, videoEl.videoHeight || 480);
+    logOk(`Camera granted — ${videoEl.videoWidth}x${videoEl.videoHeight}, capture canvas ${canvas.width}x${canvas.height}`);
+    mode = 'camera';
+    placeholderEl.style.display = 'none';
+    controls2.style.display = 'flex';
+    refreshActionButton();
+    checkARSupport();
+    startLiveLoop();
+  } catch (err) {
+    console.error(err);
+    logError(`Camera permission failed: ${err && err.name ? err.name : ''} ${err && err.message ? err.message : err}`);
+    showError('Camera access was blocked or unavailable. Check your browser\'s site permissions, then retry.');
+    btnCamera.style.display = 'block';
+  }
+}
+
+function startLiveLoop() {
+  stopLiveLoop();
+  const draw = () => {
+    if (mode !== 'camera' || !videoEl.srcObject) return;
+    ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+    liveLoopId = requestAnimationFrame(draw);
+  };
+  liveLoopId = requestAnimationFrame(draw);
+}
+function stopLiveLoop() {
+  if (liveLoopId) cancelAnimationFrame(liveLoopId);
+  liveLoopId = null;
+}
+
+// ============ LIVE 3D WORLD (orbit view) ============
+
+// ============ 3D WORLD ============
+
+function ensureThree() {
+  if (renderer3d) return;
+  renderer3d = new THREE.WebGLRenderer({ canvas: stage3d, antialias: true, alpha: false });
+  renderer3d.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  scene3d = new THREE.Scene();
+  scene3d.background = new THREE.Color(0x000000);
+  camera3d = new THREE.PerspectiveCamera(55, 4 / 3, 0.05, 20);
+  camera3d.position.set(0, 0, 2.1);
+  controls3d = new OrbitControls(camera3d, stage3d);
+  controls3d.enableDamping = true;
+  controls3d.dampingFactor = 0.12;
+  controls3d.minDistance = 0.6;
+  controls3d.maxDistance = 6;
+  controls3d.rotateSpeed = 0.6;
+  const light = new THREE.AmbientLight(0xffffff, 1);
+  scene3d.add(light);
+}
+
+function resizeThree() {
+  if (!renderer3d) return;
+  const w = canvas.width, h = canvas.height;
+  renderer3d.setSize(w, h, false);
+  camera3d.aspect = w / h;
+  camera3d.updateProjectionMatrix();
+}
+
+function categoryForPixel(p, categoryMasks) {
+  for (const cat of CATEGORY_ORDER) {
+    const m = categoryMasks[cat];
+    if (m && m[p] === 255) return cat;
+  }
+  return null;
+}
+
+async function analyzeFrame(w, h) {
+  const baseData = ctx.getImageData(0, 0, w, h);
+  const rawImage = RawImage.fromCanvas(canvas);
+  const [segOutput, depthOutput] = await Promise.all([segmenter(rawImage), depther(rawImage)]);
+
+  const categoryMasks = {};
+  for (const seg of segOutput) {
+    const cat = categorizeLabel(String(seg.label || ''));
+    let m = seg.mask;
+    if (m.width !== w || m.height !== h) m = await m.resize(w, h);
+    if (!categoryMasks[cat]) categoryMasks[cat] = new Uint8Array(w * h);
+    const data = m.data;
+    const channels = m.channels || 1;
+    for (let p = 0, di = 0; p < w * h; p++, di += channels) {
+      if (data[di] > 127) categoryMasks[cat][p] = 255;
+    }
+  }
+
+  let depthMask = depthOutput.depth;
+  if (depthMask.width !== w || depthMask.height !== h) depthMask = await depthMask.resize(w, h);
+  const dData = depthMask.data;
+  const dChannels = depthMask.channels || 1;
+  const depthArr = new Float32Array(w * h);
+  for (let p = 0, di = 0; p < w * h; p++, di += dChannels) depthArr[p] = dData[di] / 255;
+
+  return { baseData, categoryMasks, depthArr };
+}
+
+function updatePointCloud(baseData, categoryMasks, depthArr, w, h, tier) {
+  const gridW = tier.w, gridH = tier.h;
+  const count = gridW * gridH;
+  if (!pointsGeom || pointsGeom.__gridW !== gridW || pointsGeom.__gridH !== gridH) {
+    if (pointsObj) { scene3d.remove(pointsObj); pointsGeom.dispose(); pointsObj.material.dispose(); }
+    pointsGeom = new THREE.BufferGeometry();
+    const positions = new Float32Array(count * 3);
+    const colors = new Float32Array(count * 3);
+    pointsGeom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    pointsGeom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    pointsGeom.__gridW = gridW; pointsGeom.__gridH = gridH;
+    const mat = new THREE.PointsMaterial({ size: tier.size, vertexColors: true, sizeAttenuation: true });
+    pointsObj = new THREE.Points(pointsGeom, mat);
+    scene3d.add(pointsObj);
+  } else {
+    pointsObj.material.size = tier.size;
+  }
+
+  const posArr = pointsGeom.attributes.position.array;
+  const colArr = pointsGeom.attributes.color.array;
+  const aspect = w / h;
+  let idx = 0;
+  for (let gy = 0; gy < gridH; gy++) {
+    const sy = Math.min(h - 1, Math.round(((gy + 0.5) / gridH) * h));
+    const ny = -((gy / (gridH - 1)) - 0.5) * 2;
+    for (let gx = 0; gx < gridW; gx++) {
+      const sx = Math.min(w - 1, Math.round(((gx + 0.5) / gridW) * w));
+      const p = sy * w + sx;
+      const nx = ((gx / (gridW - 1)) - 0.5) * 2 * aspect;
+      const nz = (depthArr[p] - 0.5) * DEPTH_SCALE;
+      posArr[idx * 3] = nx;
+      posArr[idx * 3 + 1] = ny;
+      posArr[idx * 3 + 2] = nz;
+
+      const o = p * 4;
+      let r = baseData.data[o], g = baseData.data[o + 1], b = baseData.data[o + 2];
+      const cat = categoryForPixel(p, categoryMasks);
+      if (cat) {
+        const [cr, cg, cb] = CATEGORY_COLORS[cat];
+        const a = 0.45;
+        r = cr * a + r * (1 - a); g = cg * a + g * (1 - a); b = cb * a + b * (1 - a);
+      }
+      colArr[idx * 3] = r / 255; colArr[idx * 3 + 1] = g / 255; colArr[idx * 3 + 2] = b / 255;
+      idx++;
+    }
+  }
+  pointsGeom.attributes.position.needsUpdate = true;
+  pointsGeom.attributes.color.needsUpdate = true;
+}
+
+function renderLoopTick() {
+  if (!live3DActive) { renderLoopId = null; return; }
+  controls3d.update();
+  renderer3d.render(scene3d, camera3d);
+  renderLoopId = requestAnimationFrame(renderLoopTick);
+}
+
+async function live3DCycle() {
+  if (!live3DActive || mode !== 'camera') { dataLoopRunning = false; return; }
+  dataLoopRunning = true;
+  const t0 = performance.now();
+  try {
+    ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+    const w = canvas.width, h = canvas.height;
+    const { baseData, categoryMasks, depthArr } = await analyzeFrame(w, h);
+    const tier = QUALITY_TIERS[tierIndex];
+    updatePointCloud(baseData, categoryMasks, depthArr, w, h, tier);
+    const dt = performance.now() - t0;
+    if (dt < 350) {
+      fastStreak++; slowStreak = 0;
+      if (fastStreak >= 3 && tierIndex < QUALITY_TIERS.length - 1) { tierIndex++; fastStreak = 0; }
+    } else if (dt > 900) {
+      slowStreak++; fastStreak = 0;
+      if (slowStreak >= 2 && tierIndex > 0) { tierIndex--; slowStreak = 0; }
+    }
+    setStatus(`LIVE 3D • ${tier.label} • ${Math.round(dt)}ms/frame`, 'ready');
+  } catch (err) {
+    console.error(err);
+    setStatus('3D FRAME FAILED — RETRYING', 'error');
+  }
+  if (live3DActive) live3DCycle();
+  else dataLoopRunning = false;
+}
+
+async function enter3D() {
+  if (!segmenter || !depther) { showError('Models still loading — please wait.'); return; }
+  if (mode !== 'camera') return;
+  clearError();
+  ensureThree();
+  resizeThree();
+  stopLiveLoop();
+  canvas.style.display = 'none';
+  stage3d.style.display = 'block';
+  depthNoteEl.classList.add('on');
+  live3DActive = true;
+  refreshActionButton();
+  if (!renderLoopId) renderLoopTick();
+  if (!dataLoopRunning) live3DCycle();
+}
+
+async function onActionButton() {
+  if (live3DActive) exit3D(); else await enter3D();
+}
+
+// ============ AR ROOM SCAN (real walking, WebXR depth-sensing) ============
+// Note: this reconstructs geometry from the device's own AR depth + pose tracking
+// (accurate positions), but has no access to the live camera pixels once inside the
+// XR session, so points are colored by height (floor→ceiling gradient) rather than
+// by the wall/floor/furniture categories used elsewhere in this app.
+
+function initARPoints() {
+  if (arPointsGeom) return;
+  arPositions = new Float32Array(AR_CAPACITY * 3);
+  arColors = new Float32Array(AR_CAPACITY * 3);
+  arPointsGeom = new THREE.BufferGeometry();
+  arPointsGeom.setAttribute('position', new THREE.BufferAttribute(arPositions, 3));
+  arPointsGeom.setAttribute('color', new THREE.BufferAttribute(arColors, 3));
+  arPointsGeom.setDrawRange(0, 0);
+  const mat = new THREE.PointsMaterial({ size: 0.02, vertexColors: true, sizeAttenuation: true });
+  arPointsObj = new THREE.Points(arPointsGeom, mat);
+  arPointsObj.frustumCulled = false;
+  scene3d.add(arPointsObj);
+  arWriteIndex = 0; arCount = 0;
+  arPointsGeom.setDrawRange(0, 0);
+}
+
+function lerp3(a, b, t) {
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+}
+
+function addARPoint(x, y, z) {
+  const i = arWriteIndex;
+  arPositions[i * 3] = x; arPositions[i * 3 + 1] = y; arPositions[i * 3 + 2] = z;
+  const t = Math.max(0, Math.min(1, y / 2.4)); // assume ~2.4m room height for the color gradient
+  const [r, g, b] = lerp3(CATEGORY_COLORS.floor, CATEGORY_COLORS.wall, t);
+  arColors[i * 3] = r / 255; arColors[i * 3 + 1] = g / 255; arColors[i * 3 + 2] = b / 255;
+  arWriteIndex = (arWriteIndex + 1) % AR_CAPACITY;
+  if (arCount < AR_CAPACITY) arCount++;
+  arPointsGeom.attributes.position.needsUpdate = true;
+  arPointsGeom.attributes.color.needsUpdate = true;
+  arPointsGeom.setDrawRange(0, arCount);
+}
+
+const _invProj = new THREE.Matrix4();
+const _clip = new THREE.Vector4();
+const _worldMat = new THREE.Matrix4();
+const _pt = new THREE.Vector3();
+
+function unprojectAndAdd(view, ndcX, ndcY, depthMeters) {
+  _invProj.fromArray(view.projectionMatrix).invert();
+  _clip.set(ndcX, ndcY, -1, 1).applyMatrix4(_invProj);
+  if (_clip.w !== 0) _clip.divideScalar(_clip.w);
+  _pt.set(_clip.x, _clip.y, _clip.z).normalize().multiplyScalar(depthMeters);
+  _worldMat.fromArray(view.transform.matrix);
+  _pt.applyMatrix4(_worldMat);
+  addARPoint(_pt.x, _pt.y, _pt.z);
+}
+
+function onXRFrame(timestamp, frame) {
+  const refSpace = renderer3d.xr.getReferenceSpace();
+  const pose = frame.getViewerPose(refSpace);
+  arFrameCount++;
+  if (pose) {
+    arPoseCount++;
+    if (!arGotFirstPose) { arGotFirstPose = true; logOk('First XR pose received — position tracking is live.'); }
+    for (const view of pose.views) {
+      let depthInfo = null;
+      try { depthInfo = frame.getDepthInformation(view); } catch (e) { /* not available this frame */ }
+      if (depthInfo) {
+        arDepthCount++;
+        if (!arGotFirstDepth) {
+          arGotFirstDepth = true;
+          logOk(`First depth frame received — ${depthInfo.width}x${depthInfo.height}, format check ok.`);
+        }
+        for (let gy = 0; gy < AR_SAMPLE_GRID; gy++) {
+          const v = (gy + 0.5) / AR_SAMPLE_GRID;
+          for (let gx = 0; gx < AR_SAMPLE_GRID; gx++) {
+            const u = (gx + 0.5) / AR_SAMPLE_GRID;
+            let d = 0;
+            try { d = depthInfo.getDepthInMeters(u, v); } catch (e) { d = 0; }
+            if (d > 0.15 && d < 6) {
+              if (d < arDepthMin) arDepthMin = d;
+              if (d > arDepthMax) arDepthMax = d;
+              unprojectAndAdd(view, u * 2 - 1, (1 - v) * 2 - 1, d);
+            }
+          }
+        }
+      }
+    }
+  } else if (arFrameCount % 60 === 0) {
+    logWarn(`No viewer pose yet after ${arFrameCount} frames — tracking may be initializing or lost.`);
+  }
+  arStatsEl.textContent = `${arCount.toLocaleString()} pts`;
+  if (timestamp - arLastStatsLog > 2000) {
+    arLastStatsLog = timestamp;
+    const depthRange = arDepthMax >= arDepthMin ? `${arDepthMin.toFixed(2)}–${arDepthMax.toFixed(2)}m` : 'n/a';
+    logInfo(`AR stats — frames:${arFrameCount} poses:${arPoseCount} depthFrames:${arDepthCount} points:${arCount} depthRange:${depthRange}`);
+    if (arGotFirstPose && !arGotFirstDepth && arFrameCount > 90) {
+      logWarn('Pose tracking is working but no depth data has arrived — this device/browser may not actually support depth-sensing despite negotiating the session.');
+    }
+  }
+  renderer3d.render(scene3d, camera3d);
+}
+
+function onARSessionEnd() {
+  logInfo(`AR session ended — total frames:${arFrameCount} poses:${arPoseCount} depthFrames:${arDepthCount} points collected:${arCount}`);
+  renderer3d.setAnimationLoop(null);
+  arOverlay.classList.remove('on');
+  arDebugMini.classList.remove('on');
+  arSession = null;
+  setStatus('AR SCAN ENDED', 'ready');
+  refreshActionButton();
+  if (mode === 'camera' && videoEl.srcObject) startLiveLoop();
+}
+
+async function startARScan() {
+  if (!arSupported) {
+    logWarn('Scan Room in AR tapped but immersive-ar is unsupported on this device/browser.');
+    showError('AR walkthrough needs an AR-capable Android phone in Chrome — try "Live 3D (orbit)" instead.');
+    return;
+  }
+  clearError();
+  ensureThree();
+  initARPoints();
+  stopLiveLoop();
+  if (live3DActive) exit3D();
+  arOverlay.classList.add('on');
+  arFrameCount = 0; arPoseCount = 0; arDepthCount = 0; arDepthMin = Infinity; arDepthMax = -Infinity;
+  arGotFirstPose = false; arGotFirstDepth = false; arLastStatsLog = 0;
+  logInfo('Requesting immersive-ar session (requiredFeatures: depth-sensing, local-floor)…');
+  try {
+    const session = await navigator.xr.requestSession('immersive-ar', {
+      requiredFeatures: ['depth-sensing', 'local-floor'],
+      optionalFeatures: ['dom-overlay'],
+      domOverlay: { root: arOverlay },
+      depthSensing: { usagePreference: ['cpu-optimized'], dataFormatPreference: ['float32', 'luminance-alpha'] }
+    });
+    arSession = session;
+    logOk('immersive-ar session granted.');
+    renderer3d.xr.enabled = true;
+    renderer3d.xr.setReferenceSpaceType('local-floor');
+    await renderer3d.xr.setSession(session);
+    logOk('Session bound to renderer, local-floor reference space set. Starting frame loop.');
+    setStatus('AR SCAN — WALK SLOWLY, LOOK AROUND', 'ready');
+    renderer3d.setAnimationLoop(onXRFrame);
+    session.addEventListener('end', onARSessionEnd);
+    refreshActionButton();
+  } catch (err) {
+    console.error(err);
+    logError(`requestSession failed: ${err && err.name ? err.name : ''} ${err && err.message ? err.message : err}`);
+    arOverlay.classList.remove('on');
+    showError('Could not start the AR session on this device (depth sensing may be unsupported). Try "Live 3D (orbit)" instead.');
+  }
+}
+
+btnCamera.addEventListener('click', startCamera);
+btnScan.addEventListener('click', onActionButton);
+btnAR.addEventListener('click', startARScan);
+btnExitAR.addEventListener('click', () => { if (arSession) arSession.end(); });
+
+checkARSupport();
+loadModel();
+startCamera(); // ask for camera permission immediately on load
+</script>
+</body>
+</html>
